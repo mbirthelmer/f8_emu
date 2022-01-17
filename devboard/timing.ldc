@@ -1,0 +1,27 @@
+################################################
+# This section describes SDC language elements for timing-driven
+# synthesis that are supported by the Lattice Synthesis Engine (LSE).
+#
+# The constraints here will be translated to corresponding
+# timing Preference (Preferences are implementation constraints
+# for assigning design logic to physical resources) for back-end flow.
+################################################
+
+create_clock -period 83.333298 -name clk_12m_in [ get_ports { clk_12m_in } ]
+create_generated_clock -divide_by 6 -multiply_by 8 -source [ get_ports { clk_12m_in } ] -name clk_16m [ get_nets { clk_16m } ]
+# create_generated_clock -divide_by 48 -multiply_by 8 -source [ get_ports { clk_12m_in } ] -name clk_2m [ get_nets { xtly } ]
+
+# create_generated_clock -divide_by 1 -source [ get_ports { i_sram/i_oddr_sck/SCLK } ] -name sram_sck [ get_ports{ sram_sck } ]
+# set_input_delay -clock sram_sck -clock_fall -max 38 [get_ports {sram_d[0] sram_d[1]}]
+# set_output_delay -clock sram_sck -max 11 [get_ports {sram_d[0] sram_d[1]}]
+# set_output_delay -clock sram_sck -min -11 [get_ports {sram_d[0] sram_d[1]}]
+
+
+################################################
+# This section describes the HDL Attributes that are supported
+# by the Lattice Synthesis Engine (LSE).
+#
+# These attributes are directly interpreted by the engine and
+# influence the optimization or structure of the output netlist.
+################################################
+
