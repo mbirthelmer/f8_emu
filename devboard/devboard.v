@@ -58,18 +58,20 @@ module devboard(
 		ticks <= ticks + 1;
 	end 
 	
-	assign io0_out = ticks[15:8];
-	assign io1_out = ticks[15:8];
+	assign io0_out = cfg_sw[1] ? 8'hff : ticks[15:8];
+	assign io1_out =  cfg_sw[1] ? 8'hff : ticks[15:8];
 	assign db_out = ticks[15:8];
-	assign db_t = 1'b0;
-	assign ph = clk_2m;
+	assign db_t = cfg_sw[1];
+	assign ph = cfg_sw[1] ? 1'bz : clk_2m;
 	assign xtly = clk_2m;
 	
-	assign write = (ticks[1:0] == 2'b11);
+	assign write = cfg_sw[1] ? 1'bz : (ticks[1:0] == 2'b11);
 	
-	assign romc = ticks[15:11];
+	assign romc = cfg_sw[1] ? 1'bz : ticks[15:11];
 	
 	assign led = ~{ticks[15:11], sram_test_status, pll_lock}; 
+	
+	assign ext_res_n = cfg_sw[1] ? pll_lock : 1'bz;
 	
 	sram_sdi_test i_sram(.clk(clk_16m), .reset(~pll_lock), .status(sram_test_status),
 		.sck(sram_sck), .cs(sram_cs), .d(sram_d));

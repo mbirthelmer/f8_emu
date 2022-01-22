@@ -64,7 +64,7 @@ module sram_sdi_test(
 	crc i_crc(.clk(clk), .crc_en(crc_en), .crc_out(crc_out), .rst(crc_rst), 
 		.data_in(do_read ? d : sr[7:6]));
 `ifndef TEST_BYTES
-`define TEST_BYTES	21'd8
+`define TEST_BYTES	 21'h40000
 `endif
 
 //`define TEST_BYTES 21'h40000
