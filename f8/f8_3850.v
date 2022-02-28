@@ -10,6 +10,7 @@ module f8_3850 (
 	output write,
 	output clk_phi,
 	input clk,
+	input clk_delay,
 	
 	input [7:0] io0_in,
 	output reg [7:0] io0_out,
@@ -36,8 +37,8 @@ module f8_3850 (
 	reg z, ov, c, s, icb;
 	wire alu_z, alu_ov, alu_c, alu_s;
 	
-	reg [5:0] isar;
-	reg isar_d, isar_we;
+	reg [5:0] isar, isar_d;
+	reg isar_we;
 	reg [5:0] isar_r, isar_a;
 	
 	reg [7:0] scratchpad[63:0], scr_q, scr_d;
@@ -57,9 +58,11 @@ module f8_3850 (
 
 	reg [4:0] romc_pre;
 
-	reg accept_irq;
+	reg disallow_irq;
+	reg sampled_irq;
+	reg do_irq;
 
-	assign clk_phi = clk;
+	assign clk_phi = clk_delay; // this is a clock that's delayed to meet the td1/td2 skew while the rising edge of clk coincides with rising edge of WRITE
 	
 	localparam RBUS_SCR = 3'd0, RBUS_ISAR = 3'd1, RBUS_INST = 3'd2, 
 				RBUS_IDATA = 3'd3;
@@ -77,11 +80,11 @@ module f8_3850 (
 	
 	reg rst_fe, rst_re, rst_re_d, rst_done;
 
-	always @(posedge clk) begin
+	always @(negedge clk) begin
 		romc <= romc_pre;
 	end
 	
-	always @(negedge clk) begin
+	always @(posedge clk) begin
 		if(scr_re && cycle == 0) begin
 			scr_q <= scratchpad[scr_raddr];
 		end
@@ -95,11 +98,12 @@ module f8_3850 (
 		if(db_re) idata = db_in;
 		else if(io_re[0]) idata = io0_in;
 		else if(io_re[1]) idata = io1_in;
+		else idata = 8'h00;
 	end
 	
 	assign write = (rst_re && !rst_re_d) || last_cycle;
 
-	always @(negedge clk) begin
+	always @(posedge clk) begin
 		if(!ext_res_n) begin
 			rst_done <= 1'b0;
 			rst_re <= 1'b0;
@@ -122,13 +126,14 @@ module f8_3850 (
 					if(acc_we_d) begin
 						acc <= result;
 					end
+					db_t = 1'b1;
 				end else if(cycle == 1) begin
 					if(db_we && (alu_op == `ALU_L) && (lbus_sel == LBUS_ACC)) begin 
 						// td1
 						db_t <= 1'b0;
 						db_out <= result;
-					end else
-						db_t = 1'b1;
+					end
+					sampled_irq <= ~int_req_n;
 				end else if(cycle == 2) begin
 					if(db_we) begin
 						// td2
@@ -144,13 +149,14 @@ module f8_3850 (
 						rst_done <= 1'b1;
 						opcode <= db_in;
 						instr <= 3'd0;
+
+						do_irq <= ~disallow_irq & sampled_irq & icb;
 					end else
 						instr <=  instr_next;
-															
+																				
+					if(acc_we) acc <= result;
+
 					if(isar_we) isar <= isar_d;
-					
-					if(acc_we)
-						acc <= result;
 
 					z <= new_z;
 					c <= new_c;
@@ -240,7 +246,7 @@ module f8_3850 (
 	end
 	endtask
 	
-	function [3:0] op_isar(input [7:0] opcode);
+	function [5:0] op_isar(input [7:0] opcode);
 	begin
 		if(opcode[3:0] <= 4'hB) begin
 			op_isar = opcode[3:0];
@@ -286,6 +292,8 @@ module f8_3850 (
 		new_ov = ov;
 		new_c = c;
 		new_s = s;
+
+		acc_we = 1'b0;
 		
 		scr_re = 1'b0;
 		scr_we = 1'b0;
@@ -306,8 +314,11 @@ module f8_3850 (
 		db_re = 1'b0;
 		io_we = 2'b0;
 		io_re = 2'b0;
+
+		disallow_irq = 1'b0;
 		
 		if(!rst_done) begin
+			new_icb = 1'b0;	
 			case(instr)
 			0: instr_romc(5'h1c);
 			1: begin
@@ -318,7 +329,8 @@ module f8_3850 (
 			end
 			2: instr_last = 1'b1;
 			endcase
-		end else if(icb && ~int_req_n) begin
+		end else if(do_irq) begin
+			new_icb = 1'b0;	
 			case(instr)
 			0: instr_romc(5'h1c);
 			1: instr_romc(5'h0f);
@@ -390,7 +402,7 @@ module f8_3850 (
 				end
 				endcase
 			end
-		`OP_LR_P_K: begin
+			`OP_LR_P_K: begin
 				case(instr)
 				0: begin
 					instr_romc(5'h15);
@@ -441,6 +453,7 @@ module f8_3850 (
 				endcase
 			end
 		`OP_LR_P0_Q: begin
+				disallow_irq = 1'b1;
 				case(instr)
 				0: begin
 					instr_romc(5'h17);
@@ -613,6 +626,7 @@ module f8_3850 (
 				endcase
 			end
 		`OP_EI: begin
+				disallow_irq = 1'b1;
 				case(instr)
 				0: begin
 					instr_romc(5'h1c);
@@ -624,14 +638,17 @@ module f8_3850 (
 				endcase
 			end
 		`OP_POP: begin
+				disallow_irq = 1'b1;
 				case(instr)
 				0: instr_romc(5'h04);
 				1: instr_last = 1'b1;
 				endcase
 			end
 		`OP_LR_W_J: begin
+				disallow_irq = 1'b1;
 				case(instr)
 				0: begin
+					instr_romc(5'h1c);
 					scr_read(6'd9);
 					{new_icb, new_ov, new_z, new_c, new_s} = result[4:0];
 					alu_op = `ALU_L;
@@ -741,6 +758,7 @@ module f8_3850 (
 				endcase
 			end
 		`OP_OUT: begin
+				disallow_irq = 1'b1;
 				case(instr)
 				0: begin
 					instr_romc(5'h03);
@@ -757,6 +775,7 @@ module f8_3850 (
 				endcase
 			end
 		`OP_PI: begin
+				disallow_irq = 1'b1;
 				case(instr)
 				0: begin
 					instr_romc(5'h03);
@@ -782,6 +801,7 @@ module f8_3850 (
 				endcase
 			end
 		`OP_JMP: begin
+				disallow_irq = 1'b1;
 				case(instr)
 				0: begin
 					instr_romc(5'h03);
@@ -869,18 +889,12 @@ module f8_3850 (
 				case(instr)
 				0: begin
 					instr_romc(5'h1c);
-					instr_next = (opcode[2:0] & status[2:0]) ? 3'd3 : 3'd1;
 				end
 				1: begin
-					instr_romc(5'h03);
-					op_long = 1'b0;
+					instr_romc((opcode[2:0] & status[2:0]) ? 3'd1 : 3'd3);
 				end
 				2: begin
 					instr_last = 1'b1;
-				end
-				3: begin
-					instr_romc(5'h01);
-					instr_next = 3'd2;
 				end
 				endcase
 			end
@@ -893,9 +907,9 @@ module f8_3850 (
 					db_read();
 					
 					case(opcode)
-				`OP_AM: alu_op = `ALU_ADD;
-				`OP_AMD: alu_op = `ALU_ADD_BCD;
-				`OP_CM: alu_op = `ALU_CMP;
+					`OP_AM: alu_op = `ALU_ADD;
+					`OP_AMD: alu_op = `ALU_ADD_BCD;
+					`OP_CM: alu_op = `ALU_CMP;
 					endcase
 					
 					new_ov = alu_ov;
@@ -917,9 +931,9 @@ module f8_3850 (
 					db_read();
 					
 					case(opcode)
-				`OP_NM: alu_op = `ALU_AND;
-				`OP_OM: alu_op = `ALU_OR;
-				`OP_XM: alu_op = `ALU_XOR;
+					`OP_NM: alu_op = `ALU_AND;
+					`OP_OM: alu_op = `ALU_OR;
+					`OP_XM: alu_op = `ALU_XOR;
 					endcase
 					
 					new_ov = 1'b0;
@@ -948,15 +962,10 @@ module f8_3850 (
 		`OP_BR7: begin
 				case(instr)
 				0: begin
-					instr_romc(5'h03);
-					instr_next = &isar[2:0] ? 3'd2 : 3'd1;
+					instr_romc(isar[2:0] == 3'd7 ? 5'h03 : 5'h01);
 				end
 				1: begin
 					instr_last = 1'b1;
-				end
-				2: begin
-					instr_romc(5'h01);
-					instr_next = 3'd1;
 				end
 				endcase
 			end
@@ -964,18 +973,12 @@ module f8_3850 (
 				case(instr)
 				0: begin
 					instr_romc(5'h1c);
-					instr_next = (opcode[3:0] & status[3:0]) ? 3'd3 : 3'd1;
 				end
 				1: begin
-					instr_romc(5'h01);
+					instr_romc((opcode[3:0] & status[3:0]) ? 5'h03 : 5'h01);
 				end
 				2: begin
 					instr_last = 1'b1;
-				end
-				3: begin
-					instr_romc(5'h03);
-					op_long = 1'b0;
-					instr_next = 3'd2;
 				end
 				endcase
 			end
@@ -1015,6 +1018,8 @@ module f8_3850 (
 				endcase
 			end
 		`OP_OUTS: begin
+				disallow_irq = |opcode[3:1];
+
 				case(instr)
 				0: begin
 					instr_romc(5'h1c);
@@ -1050,10 +1055,10 @@ module f8_3850 (
 				acc_write();
 				scr_read(op_isar(opcode));
 				
-				case(opcode)
-			`OP_AS: alu_op = `ALU_ADD;
-			`OP_XS: alu_op = `ALU_XOR;
-			`OP_NS: alu_op = `ALU_AND;
+				casex(opcode)
+				`OP_AS: alu_op = `ALU_ADD;
+				`OP_XS: alu_op = `ALU_XOR;
+				`OP_NS: alu_op = `ALU_AND;
 				endcase
 				
 				new_ov = (opcode ==`OP_AS) ? alu_ov : 1'b0;

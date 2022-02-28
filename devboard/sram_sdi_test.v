@@ -124,6 +124,8 @@ module sram_sdi_test(
 				//21'd1048598: begin
 				//21'd54: begin
 				(22 + 4 * `TEST_BYTES): begin
+				end
+				(23 + 4 * `TEST_BYTES): begin
 					cs <= 1'b1;
 					state <= (crc_out != crc_write) ? ST_FAIL :
 							  (state == ST_RD_BANK0) ? ST_WR_BANK1 : ST_WR_BANK0;

@@ -27,4 +27,20 @@ b0		/* 20: io0 <- a */
 3f		/* 22: dec r15 */
 04 		/* 23: a <- r15 */
 b1		/* 24: io1 <- a */
-29 07 ff /* jmp 0x7ff */
+67		/* 25: ISARU <= 7 */
+68		/* 26: ISRAL <= 0 */
+75		/* 27: A <= 5 */
+52		/* 28: scratchpad[2] <= A */
+73		/* 29: A <= 3 */
+c2		/* 2a: A += scratchpad[2] */
+5d		/* 2b: scatchpad[ISARU:ISARL++] <= A */
+8f fc	/* 2c: if ISARL == 7 goto -4 (29) else goto +2 (2e) */
+
+b0		/* 2e: IO0 <= A */
+b1		/* 2f: IO1 <= A */
+b2		/* 30: IO2 <= A */
+
+29 07 ff /* 31: jmp 0x7ff */
+
+@7ff
+90 fe	/* 7ff: jmp 7ff */
