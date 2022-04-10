@@ -41,6 +41,9 @@ module tb_f8_3850_alu;
 	15: tests = {`ALU_CMP,	8'h1b, 8'hd8, 1'h0, 8'hbd, 1'h1, 1'h0, 1'h0, 1'h0};
 	16: tests = {`ALU_ADD_BCD, 8'h87, 8'h67, 1'h0, 8'h88, 1'h0, 1'h0, 1'h0, 1'h0};
 	17: tests = {`ALU_DEC_R, 8'h00, 8'h17, 1'h0, 8'h16, 1'h1, 1'h0, 1'h0, 1'h1};
+	18: tests = {`ALU_ADD_BCD, 8'hab, 8'h65, 1'b0, 8'h10, 1'b1, 1'b0, 1'b0, 1'b1};
+	19: tests = {`ALU_ADD_BCD, 8'hFF, 8'h01, 1'b0, 8'h00, 1'b1, 1'b1, 1'b0, 1'b1};
+	20: tests = {`ALU_ADD_BCD, 8'h67, 8'h99, 1'b0, 8'h00, 1'b1, 1'b1, 1'b0, 1'b1};
 	endcase
 	end
 	endfunction
@@ -53,7 +56,7 @@ module tb_f8_3850_alu;
 		$dumpfile("alu.vcd");
 		$dumpvars;
 
-		for(i=0; i<18; i=i+1) begin
+		for(i=0; i<21; i=i+1) begin
 			#2;
 			$display("test %d", i);
 			{op, left, right, c_in, exp_result, exp_c, exp_z, exp_ov, exp_s} = tests(i);

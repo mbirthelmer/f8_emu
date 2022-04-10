@@ -45,8 +45,9 @@ module f8_3850 (
 	reg [5:0] scr_raddr, scr_waddr;
 	reg scr_we, scr_re;
 	
-	reg acc_we, acc_we_d, new_z, new_ov, new_c, new_s, new_icb;
+	reg acc_we, new_icb;
 	reg db_we, db_re;
+	reg [3:0] alu_stat, new_stat;
 	
 	reg [1:0] io_we, io_re;
 			
@@ -78,7 +79,8 @@ module f8_3850 (
 
 	assign status = {3'b0, icb, ov, z, c, s};
 	
-	reg rst_fe, rst_re, rst_re_d, rst_done;
+	//reg rst_fe, rst_re, rst_re_d, rst_done;
+	reg ext_res_n_d, rst_done;
 
 	always @(negedge clk) begin
 		romc <= romc_pre;
@@ -96,79 +98,67 @@ module f8_3850 (
 
 	always @(*) begin
 		if(db_re) idata = db_in;
-		else if(io_re[0]) idata = io0_in;
-		else if(io_re[1]) idata = io1_in;
+		else if(io_re[0]) idata = ~io0_in;
+		else if(io_re[1]) idata = ~io1_in;
 		else idata = 8'h00;
 	end
 	
-	assign write = (rst_re && !rst_re_d) || last_cycle;
+	assign write = last_cycle;
+
+	initial begin
+		cycle = 3'd0;
+		ext_res_n_d = 1'b0;
+		rst_done = 1'b0;
+		instr = 0;
+	end
 
 	always @(posedge clk) begin
-		if(!ext_res_n) begin
-			rst_done <= 1'b0;
-			rst_re <= 1'b0;
-			rst_re_d <= 1'b0;
-			cycle <= 3'd0;
-			icb = 1'b0;
-		end else begin
-			if(!rst_re) begin
-				rst_re <= 1'b1;
-				cycle <= 3'd0;
-			end else if(!rst_re_d) begin
-				rst_re_d <= 1'b1;
-				
-				db_t <= 1'b1;
-				instr <= 3'd0;			
-			end else begin
-				cycle <= cycle + 1;
+		cycle <= cycle + 1;
 
-				if(cycle == 0) begin
-					if(acc_we_d) begin
-						acc <= result;
-					end
-					db_t = 1'b1;
-				end else if(cycle == 1) begin
-					if(db_we && (alu_op == `ALU_L) && (lbus_sel == LBUS_ACC)) begin 
-						// td1
-						db_t <= 1'b0;
-						db_out <= result;
-					end
-					sampled_irq <= ~int_req_n;
-				end else if(cycle == 2) begin
-					if(db_we) begin
-						// td2
-						db_t <= 1'b0;
-						db_out <= result;
-					end
-					if(io_we[0]) io0_out <= result;
-					if(io_we[1]) io1_out <= result;
-				end else if( last_cycle ) begin
-					//db_t <= 1'b1;
-					
-					if(instr_last) begin
-						rst_done <= 1'b1;
-						opcode <= db_in;
-						instr <= 3'd0;
-
-						do_irq <= ~disallow_irq & sampled_irq & icb;
-					end else
-						instr <=  instr_next;
-																				
-					if(acc_we) acc <= result;
-
-					if(isar_we) isar <= isar_d;
-
-					z <= new_z;
-					c <= new_c;
-					ov <= new_ov;
-					s <= new_s;
-
-					icb <= new_icb;
-					
-					cycle <= 3'h0;
-				end
+		if(cycle == 0) begin
+			if(db_re || instr_last) db_t <= 1'b1;
+		end else if(cycle == 1) begin
+			if(db_we && (alu_op == `ALU_L) && (lbus_sel == LBUS_ACC)) begin 
+				// td1
+				db_t <= 1'b0;
+				db_out <= result;
 			end
-		end		
+			sampled_irq <= ~int_req_n;
+		end else if(cycle == 2) begin
+			if(db_we) begin
+				// td2
+				db_t <= 1'b0;
+				db_out <= result;
+			end
+			if(io_we[0]) io0_out <= ~result;
+			if(io_we[1]) io1_out <= ~result;
+		end else if( last_cycle ) begin
+			//db_t <= 1'b1;
+			
+			if(instr_last) begin
+				rst_done <= 1'b1;
+				opcode <= db_in;
+				instr <= 3'd0;
+
+				do_irq <= ~disallow_irq & sampled_irq & icb;
+
+				rst_done <= 1'b1;
+			end else
+				instr <=  instr_next;
+																		
+			if(acc_we) acc <= result;
+
+			if(isar_we) isar <= isar_d;
+
+			{ov, z, c, s} <= (new_stat & ~alu_stat) | (alu_stat & {alu_ov, alu_z, alu_c, alu_s});
+
+			icb <= new_icb;
+			
+			cycle <= 3'h0;
+
+			ext_res_n_d <= ext_res_n;
+			if(!ext_res_n) rst_done <= 1'b0;
+		end
 	end
 	
 	task scr_read(input [5:0] addr);
@@ -221,7 +211,7 @@ module f8_3850 (
 			op_long = 1'b1;
 	end
 	endtask
-	
+
 	task acc_write();
 	begin
 		acc_we = 1'b1;
@@ -260,7 +250,7 @@ module f8_3850 (
 			isar_we = 1'b1;
 			isar_d = {isar[5:3], isar[2:0] - 3'd1};
 			op_isar = isar;
-		end
+		end else op_isar = 6'h00;
 	end
 	endfunction
 	
@@ -277,10 +267,23 @@ module f8_3850 (
 		LBUS_ACC: lbus = acc;
 		LBUS_STATUS: lbus = status;
 		LBUS_CONST_F: lbus = 8'h0f;
-		LBUS_CONST_0: lbus = 8'h0;
+		LBUS_CONST_0: lbus = 8'h00;
 		endcase
 	end
 	
+	task do_instr_last();
+	begin
+		instr_last = 1'b1;
+		if(~disallow_irq & sampled_irq & icb) begin
+			romc_pre = 5'h10;
+			op_long = 1'b1;
+		end else begin
+			romc_pre = 5'h00;
+			op_long = 1'b0;
+		end
+	end
+	endtask
+
 	always @(*) begin
 		lbus_sel = LBUS_ACC;
 		rbus_sel = RBUS_SCR;
@@ -288,10 +291,8 @@ module f8_3850 (
 		alu_op = `ALU_L;
 		
 		new_icb = icb;
-		new_z = z;
-		new_ov = ov;
-		new_c = c;
-		new_s = s;
+		alu_stat = 4'h0;
+		new_stat = {ov, z, c, s};
 
 		acc_we = 1'b0;
 		
@@ -320,14 +321,22 @@ module f8_3850 (
 		if(!rst_done) begin
 			new_icb = 1'b0;	
 			case(instr)
-			0: instr_romc(5'h1c);
+			0: begin
+				instr_romc(5'h1c);
+				instr_next <= ext_res_n_d ? 1 : 0;
+				lbus_sel = LBUS_CONST_0;
+				//alu_op = `ALU_COM;
+				acc_write();
+				io_we = 2'b11;
+				isar_we = 1'b1;
+			end
 			1: begin
 				instr_romc(5'h08);
 				db_write();
 				alu_op = `ALU_L;
 				lbus_sel = LBUS_CONST_0;
 			end
-			2: instr_last = 1'b1;
+			2: do_instr_last();
 			endcase
 		end else if(do_irq) begin
 			new_icb = 1'b0;	
@@ -335,7 +344,7 @@ module f8_3850 (
 			0: instr_romc(5'h1c);
 			1: instr_romc(5'h0f);
 			2: instr_romc(5'h13);
-			3: instr_last = 1'b1;
+			3: do_instr_last();
 			endcase
 		end else begin
 			casex(opcode)
@@ -343,45 +352,45 @@ module f8_3850 (
 				scr_read(6'd12);
 				acc_write();
 				alu_op = `ALU_R;
-				instr_last = 1'b1;				
+				do_instr_last();				
 			end
 			`OP_LR_A_KL: begin
 				scr_read(6'd13);
 				acc_write();
 				alu_op = `ALU_R;
-				instr_last = 1'b1;			
+				do_instr_last();			
 			end
 			`OP_LR_A_QU: begin
 				scr_read(6'd14);
 				acc_write();
 				alu_op = `ALU_R;
-				instr_last = 1'b1;				
+				do_instr_last();				
 			end
 			`OP_LR_A_QL: begin
 				scr_read(6'd15);
 				acc_write();
 				alu_op = `ALU_R;
-				instr_last = 1'b1;				
+				do_instr_last();				
 			end
 			`OP_LR_KU_A: begin
 				scr_write(6'd12);
 				acc_read();
-				instr_last = 1'b1;				
+				do_instr_last();				
 			end
 			`OP_LR_KL_A: begin
 				scr_write(6'd13);
 				acc_read();
-				instr_last = 1'b1;				
+				do_instr_last();				
 			end
 			`OP_LR_QU_A: begin
 					scr_write(6'd14);
 					acc_read();
-					instr_last = 1'b1;				
+					do_instr_last();				
 				end
 			`OP_LR_QL_A: begin
 					scr_write(6'd15);
 					acc_read();
-					instr_last = 1'b1;				
+					do_instr_last();				
 				end
 			`OP_LR_K_P: begin
 				case(instr)
@@ -398,7 +407,7 @@ module f8_3850 (
 					alu_op = `ALU_R;
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -417,21 +426,20 @@ module f8_3850 (
 					alu_op =`ALU_R;
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
 		`OP_LR_A_IS: begin
-				instr_last = 1'b1;
 				isar_read();
 				acc_write();
 				alu_op = `ALU_R;
-				instr_last = 1'b1;
+				do_instr_last();
 			end
 		`OP_LR_IS_A: begin
-				instr_last = 1'b1;
 				isar_d = acc[5:0];
 				isar_we = 1'b1;
+				do_instr_last();
 			end
 		`OP_PK: begin
 				case(instr)
@@ -448,7 +456,7 @@ module f8_3850 (
 					alu_op = `ALU_R;
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -468,7 +476,7 @@ module f8_3850 (
 					alu_op = `ALU_R;
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -487,7 +495,7 @@ module f8_3850 (
 					alu_op = `ALU_R;
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -506,7 +514,7 @@ module f8_3850 (
 					alu_op = `ALU_R;
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -525,7 +533,7 @@ module f8_3850 (
 					alu_op = `ALU_R;
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -544,28 +552,24 @@ module f8_3850 (
 					alu_op = `ALU_R;
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
 		`OP_SR_1, `OP_SR_4: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				acc_read();
 				acc_write();
-				new_ov = 1'b0;
-				new_z = alu_z;
-				new_c = 1'b0;
-				new_s = 1'b1;
+				alu_stat = 4'b0100;
+				new_stat = 4'b0001;
 				alu_op = (opcode ==`OP_SR_1) ? `ALU_SR_1 : `ALU_SR_4;
 			end
 		`OP_SL_1,`OP_SL_4: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				acc_read();
 				acc_write();
-				new_ov = 1'b0;
-				new_z = alu_z;
-				new_c = 1'b0;
-				new_s = alu_s;
+				alu_stat = 4'b0101;
+				new_stat = 4'b0000;
 				alu_op = (opcode ==`OP_SL_1) ? `ALU_SL_1 : `ALU_SL_4;
 			end
 		`OP_LM: begin
@@ -577,7 +581,7 @@ module f8_3850 (
 					alu_op = `ALU_R;
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -590,29 +594,24 @@ module f8_3850 (
 					alu_op = `ALU_L;
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
 		`OP_COM: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				acc_read();
 				acc_write();
 				alu_op = `ALU_COM;
-				new_ov = 1'b0;
-				new_c = 1'b0;
-				new_z = alu_z;
-				new_s = alu_s;
+				alu_stat = 4'b0101;
+				new_stat = 4'b0000;
 			end
 		`OP_LNK: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				acc_read();
 				acc_write();
 				alu_op = `ALU_LINK;
-				new_ov = alu_ov;
-				new_c = alu_c;
-				new_z = alu_z;
-				new_s = alu_s;
+				alu_stat = 4'b1111;
 			end
 		`OP_DI: begin
 				case(instr)
@@ -621,7 +620,7 @@ module f8_3850 (
 					new_icb = 1'b0;
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -633,7 +632,7 @@ module f8_3850 (
 					new_icb = 1'b1;
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -641,7 +640,7 @@ module f8_3850 (
 				disallow_irq = 1'b1;
 				case(instr)
 				0: instr_romc(5'h04);
-				1: instr_last = 1'b1;
+				1: do_instr_last();
 				endcase
 			end
 		`OP_LR_W_J: begin
@@ -650,29 +649,26 @@ module f8_3850 (
 				0: begin
 					instr_romc(5'h1c);
 					scr_read(6'd9);
-					{new_icb, new_ov, new_z, new_c, new_s} = result[4:0];
-					alu_op = `ALU_L;
+					new_icb = scr_q[4];
+					new_stat = scr_q[3:0];
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
 		`OP_LR_J_W: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				status_read();
 				scr_write(6'd9);
 				alu_op = `ALU_L;
 			end
 		`OP_INC: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				acc_read();
 				acc_write();
 				alu_op = `ALU_INC;
-				new_ov = alu_ov;
-				new_c = alu_c;
-				new_z = alu_z;
-				new_s = alu_s;
+				alu_stat = 4'b1111;	
 			end
 		`OP_LI: begin
 				case(instr)
@@ -683,7 +679,7 @@ module f8_3850 (
 					alu_op = `ALU_R;
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -694,17 +690,15 @@ module f8_3850 (
 					acc_write();
 					db_read();
 					case(opcode)
-				`OP_NI: alu_op = `ALU_AND;
-				`OP_OI: alu_op = `ALU_OR;
-				`OP_XI: alu_op = `ALU_XOR;
+					`OP_NI: alu_op = `ALU_AND;
+					`OP_OI: alu_op = `ALU_OR;
+					`OP_XI: alu_op = `ALU_XOR;
 					endcase
-					new_ov = 1'b0;
-					new_c = 1'b0;
-					new_z = alu_z;
-					new_s = alu_s;
+					alu_stat = 4'b0101;
+					new_stat = 4'b0000;
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -715,13 +709,10 @@ module f8_3850 (
 					acc_write();
 					db_read();
 					alu_op = `ALU_ADD;
-					new_ov = alu_ov;
-					new_c = alu_c;
-					new_z = alu_z;
-					new_s = alu_s;
+					alu_stat = 4'b1111;
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -731,13 +722,10 @@ module f8_3850 (
 					instr_romc(5'h03);
 					db_read();
 					alu_op = `ALU_CMP;
-					new_ov = alu_ov;
-					new_c = alu_c;
-					new_z = alu_z;
-					new_s = alu_s;
+					alu_stat = 4'b1111;
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -751,9 +739,11 @@ module f8_3850 (
 					db_read();
 					acc_write();
 					alu_op = `ALU_R;
+					alu_stat = 4'b0101;
+					new_stat = 4'b0000;
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -770,7 +760,7 @@ module f8_3850 (
 					alu_op = `ALU_L;
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -796,7 +786,7 @@ module f8_3850 (
 					alu_op = `ALU_L;
 				end
 				4: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -819,7 +809,7 @@ module f8_3850 (
 					alu_op = `ALU_L;
 				end
 				3: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -836,50 +826,53 @@ module f8_3850 (
 					instr_romc(5'h0e);
 				end
 				4: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
 		`OP_NOP: begin
-				instr_last = 1'b1;
+				do_instr_last();
 			end
 		`OP_XDC: begin
 				case(instr)
 				0: instr_romc(5'h1d);
-				1: instr_last = 1'b1;
+				1: do_instr_last();
 				endcase
 			end
 		`OP_DS: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				op_long = 1'b1;
-				scr_read( opcode[3:0] );
-				scr_write( opcode[3:0] );
+
+				scr_read( op_isar(opcode) );
+				scr_write( op_isar(opcode) );
 				alu_op = `ALU_DEC_R;
+				
+				alu_stat = 4'b1111;
 			end
 		`OP_LR_A_R: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				scr_read( op_isar(opcode) );
 				acc_write();
 				alu_op = `ALU_R;
 			end
 		`OP_LR_R_A: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				scr_write( op_isar(opcode) );
 				acc_read();
 				alu_op = `ALU_L;
 			end
 		`OP_LISU: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				isar_d = {opcode[2:0], isar[2:0]};
 				isar_we = 1'b1;
 			end
 		`OP_LISL: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				isar_d = {isar[5:3], opcode[2:0]};
 				isar_we = 1'b1;
 			end
 		`OP_LIS: begin
-				instr_last = 1'b1;
+				do_instr_last();
 				acc_write();
 				lbus_sel = LBUS_CONST_F;
 				rbus_sel = RBUS_INST;
@@ -891,10 +884,15 @@ module f8_3850 (
 					instr_romc(5'h1c);
 				end
 				1: begin
-					instr_romc((opcode[2:0] & status[2:0]) ? 3'd1 : 3'd3);
+					if(opcode[2:0] & status[2:0]) instr_romc(5'h01);
+					else begin
+						instr_romc(5'h03);
+						op_long = 1'b0;
+					end
+					// instr_romc((opcode[2:0] & status[2:0]) ? 5'd1 : 5'd3);
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -912,16 +910,13 @@ module f8_3850 (
 					`OP_CM: alu_op = `ALU_CMP;
 					endcase
 					
-					new_ov = alu_ov;
-					new_c = alu_c;
-					new_z = alu_z;
-					new_s = alu_s;
+					alu_stat = 4'b1111;
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
-			end
+			end 
 		`OP_NM,`OP_OM,`OP_XM: begin
 				case(instr)
 				0: begin
@@ -936,16 +931,15 @@ module f8_3850 (
 					`OP_XM: alu_op = `ALU_XOR;
 					endcase
 					
-					new_ov = 1'b0;
-					new_c = 1'b0;
-					new_z = alu_z;
-					new_s = alu_s;
+					alu_stat = 4'b0101;
+					new_stat = 4'b0000;
+
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
-			end
+			end 
 		`OP_ADC: begin
 				case(instr)
 				0: begin
@@ -955,17 +949,21 @@ module f8_3850 (
 					alu_op = `ALU_L;
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
 		`OP_BR7: begin
 				case(instr)
 				0: begin
-					instr_romc(isar[2:0] == 3'd7 ? 5'h03 : 5'h01);
+					//instr_romc(isar[2:0] == 3'd7 ? 5'h03 : 5'h01);
+					if(isar[2:0] == 3'd7) begin
+						instr_romc(5'h03);
+						op_long = 1'b0;
+					end else instr_romc(5'h01);
 				end
 				1: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
 				endcase
 			end
@@ -975,96 +973,114 @@ module f8_3850 (
 					instr_romc(5'h1c);
 				end
 				1: begin
-					instr_romc((opcode[3:0] & status[3:0]) ? 5'h03 : 5'h01);
+					if(opcode[3:0] & status[3:0]) begin
+						instr_romc(5'h03);
+						op_long = 1'b0;
+					end else instr_romc(5'h01);
+					//instr_romc((opcode[3:0] & status[3:0]) ? 5'h03 : 5'h01);
 				end
 				2: begin
-					instr_last = 1'b1;
+					do_instr_last();
 				end
+				endcase
+			end
+		`OP_INS01: begin
+				case(instr)
+				0: begin
+					instr_romc(5'h1c);
+					db_write();
+					acc_write();
+					io_read(opcode[0]);
+					alu_op = `ALU_R;
+					alu_stat = 4'b0101;
+					new_stat = 4'b0000;
+				end
+				1: do_instr_last();
 				endcase
 			end
 		`OP_INS: begin
 				case(instr)
 				0: begin
 					instr_romc(5'h1c);
+					db_write();	// User Guide 5-24
 					
-					if( |opcode[3:1] ) begin
-						instr_next = 3'd2;
-						op_long = 1'b1;
-						db_write();
-						rbus_sel = RBUS_INST;
-						lbus_sel = LBUS_CONST_F;
-						alu_op = `ALU_AND;
-					end else begin
-						acc_write();
-						io_read(opcode[0]);
-						alu_op = `ALU_R;
-
-						new_ov = 1'b0;
-						new_c = 1'b0;
-						new_z = alu_z;
-						new_s = alu_s;
-					end
+					op_long = 1'b1;
+					db_write();
+					rbus_sel = RBUS_INST;
+					lbus_sel = LBUS_CONST_F;
+					alu_op = `ALU_AND;						
 				end
 				1: begin
-					instr_last = 1'b1;
-				end
-				2: begin
 					instr_romc(5'h1b);
 					db_read();
 					acc_write();
 					alu_op = `ALU_R;
-					instr_next = 3'd1;
+					
+					alu_stat = 4'b0101;
+					new_stat = 4'b0000;
 				end
+				2: do_instr_last();
+				endcase
+			end
+		`OP_OUTS01: begin
+				case(instr)
+				0: begin
+					instr_romc(5'h1c);
+					db_write();
+					acc_read();
+					io_write(opcode[0]);
+				end
+				1: do_instr_last();
 				endcase
 			end
 		`OP_OUTS: begin
-				disallow_irq = |opcode[3:1];
+				disallow_irq = 1'b1;
 
 				case(instr)
 				0: begin
 					instr_romc(5'h1c);
-					
-					if( |opcode[3:1] ) begin
-						instr_next = 3'd2;
-						op_long = 1'b1;
-						db_write();
-						rbus_sel = RBUS_INST;
-						lbus_sel = LBUS_CONST_F;
-						alu_op = `ALU_AND;
-					end else begin
-						acc_read();
-						io_write(opcode[0]);
-						alu_op = `ALU_L;
-					end
+					op_long = 1'b1;
+
+					db_write();
+					rbus_sel = RBUS_INST;
+					lbus_sel = LBUS_CONST_F;
+					alu_op = `ALU_AND;
 				end
 				1: begin
-					instr_last = 1'b1;
-				end
-				2: begin
 					instr_romc(5'h1a);
 					db_write();
 					acc_read();
 					alu_op = `ALU_L;
-					instr_next = 3'd1;
 				end
+				2: do_instr_last();
 				endcase
 			end
-		`OP_AS,`OP_XS,`OP_NS: begin
-				instr_last = 1'b1;
-				
+		`OP_AS, `OP_ASD: begin
+				do_instr_last();
+		
 				acc_write();
 				scr_read(op_isar(opcode));
 				
 				casex(opcode)
 				`OP_AS: alu_op = `ALU_ADD;
+				`OP_ASD: alu_op = `ALU_ADD_BCD;
+				endcase
+
+				alu_stat = 4'b1111;
+			end
+		`OP_XS,`OP_NS: begin
+				do_instr_last();
+				
+				acc_write();
+				scr_read(op_isar(opcode));
+				
+				casex(opcode)
 				`OP_XS: alu_op = `ALU_XOR;
 				`OP_NS: alu_op = `ALU_AND;
 				endcase
-				
-				new_ov = (opcode ==`OP_AS) ? alu_ov : 1'b0;
-				new_c = (opcode ==`OP_AS) ? alu_c : 1'b0;
-				new_z = alu_z;
-				new_s = alu_s;
+
+				alu_stat = 4'b0101;
+				new_stat = 4'b0000;
 			end
 			endcase
 		end
@@ -1074,8 +1090,8 @@ module f8_3850 (
 		.op(alu_op),
 		.left(lbus),
 		.right(rbus),
-		.result(result),
 		.c_in(c),
+		.result(result),
 		.c(alu_c),
 		.z(alu_z),
 		.ov(alu_ov),

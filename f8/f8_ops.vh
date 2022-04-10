@@ -62,8 +62,10 @@
 `define OP_ADC			8'h8e
 `define OP_BR7			8'h8f
 `define OP_BF			8'h9x
+`define OP_INS01 		8'b1010000x
 `define OP_INS			8'hax
-`define OP_OUTS			8'hbx
+`define OP_OUTS01		8'b1011000x
+`define OP_OUTS 		8'hbx
 `define OP_AS			8'hcx
 `define OP_ASD			8'hdx
 `define OP_XS			8'hex

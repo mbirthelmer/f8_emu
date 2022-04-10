@@ -43,8 +43,10 @@ module tb_f8_3850;
 		clk = 1'b0;
 		rst_n = 1'b0;
 
-		#900;
+		#10025;
 		rst_n = 1'b1;
+
+		io0_in = 8'h77;
 
 		wait(pc0 == 16'h07ff);
 
@@ -53,8 +55,8 @@ module tb_f8_3850;
 		$finish;
 
 	end
-	
-	
+
+
 	localparam [15:0] ROM_START=16'h0, ROM_END=16'h2fff, RAM_START=16'h8000, RAM_END=16'h81ff;
 
 	reg [7:0] rom[ROM_START:ROM_END];
@@ -137,7 +139,7 @@ module tb_f8_3850;
 		5'h0, 5'h3: pc0 = pc0 + 1;
 		5'h1: pc0 = pc0 + db_rel_offset + 1;
 		5'h2: dc0 = dc0 + 1;
-		5'h4: pc1 = pc0;
+		5'h4: pc0 = pc1;
 		5'h5: if(dc0_in_ram) ram[dc0] = #1900 db;
 		5'h8: begin
 			pc1 = pc0;
