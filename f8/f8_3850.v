@@ -2,6 +2,7 @@
 `include "f8_ops.vh"
 
 module f8_3850 (
+
 	output reg [4:0] romc,
 	input [7:0] db_in,
 	output reg [7:0] db_out,
@@ -9,8 +10,9 @@ module f8_3850 (
 	
 	output write,
 	output clk_phi,
-	input clk,
-	input clk_delay,
+	input clk_20m,
+	input int_rst_n,
+	// input clk_delay,
 	
 	input [7:0] io0_in,
 	output reg [7:0] io0_out,
@@ -21,7 +23,15 @@ module f8_3850 (
 	input ext_res_n,
 	input int_req_n,
 	
-	output icb_n );
+	output icb_n,
+
+	input cmp_mode,
+	input cmp_clk,
+	input cmp_write_in
+
+	);
+
+	wire clk;
 
 	wire [7:0] result;
 	wire [7:0] alu_res;
@@ -63,17 +73,40 @@ module f8_3850 (
 	reg sampled_irq;
 	reg do_irq;
 
-	assign clk_phi = clk_delay; // this is a clock that's delayed to meet the td1/td2 skew while the rising edge of clk coincides with rising edge of WRITE
+	reg cmp_sync;
+	reg clk_2m;
+
+	assign clk_phi = clk_2m; // this is a clock that's delayed to meet the td1/td2 skew while the rising edge of clk coincides with rising edge of WRITE
 	
 	localparam RBUS_SCR = 3'd0, RBUS_ISAR = 3'd1, RBUS_INST = 3'd2, 
 				RBUS_IDATA = 3'd3;
 	localparam LBUS_ACC = 2'd0, LBUS_STATUS = 2'd1, LBUS_CONST_F = 2'd2, LBUS_CONST_0 = 2'd3;
 	
+	reg [3:0] divcnt;
+	wire last_cycle;
+	reg int_write;
+	
+	always @(posedge clk_20m) begin
+		if(!int_rst_n) begin
+			divcnt <= 4'd0;
+			clk_2m <= 1'b0;
+		end else begin
+			divcnt <= (divcnt == 4'd9) ? 4'd0 : divcnt + 1;
+
+			if(divcnt == 4'd1) int_write <= 1'b0;
+			else if(divcnt == 4'd2 && last_cycle) int_write <= 1'b1;
+
+			if(divcnt == 4'd4) clk_2m <= 1'b1;
+			else if(divcnt == 4'd9) clk_2m <= 1'b0;
+
+		end
+	end
+
+
 	reg [2:0] rbus_sel;
 	reg [1:0] lbus_sel;
 	
-	wire last_cycle;
-	assign last_cycle = (!op_long && cycle == 3'h3) || (cycle == 3'h5);
+	assign last_cycle = cmp_mode ? cmp_write_in : ((!op_long && cycle == 3'h3) || (cycle == 3'h5));
 	
 	assign icb_n = ~icb;
 
@@ -82,11 +115,11 @@ module f8_3850 (
 	//reg rst_fe, rst_re, rst_re_d, rst_done;
 	reg ext_res_n_d, rst_done;
 
-	always @(negedge clk) begin
+	always @(posedge clk) begin
 		romc <= romc_pre;
 	end
 	
-	always @(posedge clk) begin
+	always @(negedge clk) begin
 		if(scr_re && cycle == 0) begin
 			scr_q <= scratchpad[scr_raddr];
 		end
@@ -103,7 +136,8 @@ module f8_3850 (
 		else idata = 8'h00;
 	end
 	
-	assign write = last_cycle;
+	assign clk = cmp_mode ? cmp_clk : clk_2m;
+	assign write = cmp_mode ? cmp_write_in : int_write;
 
 	initial begin
 		cycle = 3'd0;
@@ -112,26 +146,29 @@ module f8_3850 (
 		instr = 0;
 	end
 
-	always @(posedge clk) begin
+	always @(negedge clk) begin
 		cycle <= cycle + 1;
 
 		if(cycle == 0) begin
 			if(db_re || instr_last) db_t <= 1'b1;
-		end else if(cycle == 1) begin
-			if(db_we && (alu_op == `ALU_L) && (lbus_sel == LBUS_ACC)) begin 
+			if(db_we && !scr_re) begin
 				// td1
 				db_t <= 1'b0;
 				db_out <= result;
 			end
-			sampled_irq <= ~int_req_n;
-		end else if(cycle == 2) begin
+		end else if(cycle == 1) begin
 			if(db_we) begin
-				// td2
 				db_t <= 1'b0;
 				db_out <= result;
 			end
-			if(io_we[0]) io0_out <= ~result;
-			if(io_we[1]) io1_out <= ~result;
+			//if(db_we && (alu_op == `ALU_L) && (lbus_sel == LBUS_ACC)) begin 
+			sampled_irq <= ~int_req_n;
+		end else if(cycle == 2) begin
+			/*if(db_we) begin
+				// td2
+				db_t <= 1'b0;
+				db_out <= result;
+			end*/
 		end else if( last_cycle ) begin
 			//db_t <= 1'b1;
 			
@@ -150,9 +187,15 @@ module f8_3850 (
 
 			if(isar_we) isar <= isar_d;
 
-			{ov, z, c, s} <= (new_stat & ~alu_stat) | (alu_stat & {alu_ov, alu_z, alu_c, alu_s});
+			if(io_we[0]) io0_out <= ~result;
+			if(io_we[1]) io1_out <= ~result;
 
-			icb <= new_icb;
+			if(opcode == `OP_LR_W_J)
+				{icb, ov, z, c, s} <= scr_q[4:0];
+			else begin
+				{ov, z, c, s} <= (new_stat & ~alu_stat) | (alu_stat & {alu_ov, alu_z, alu_c, alu_s});
+				icb <= new_icb;
+			end
 			
 			cycle <= 3'h0;
 
@@ -205,10 +248,11 @@ module f8_3850 (
 	task instr_romc(input [4:0] _romc);
 	begin
 		romc_pre = _romc;
-		if(_romc == 5'h00 || _romc == 5'h0d || _romc == 5'h1c || _romc == 5'h1d)
+		case(_romc)
+		5'h00, 5'h04, 5'h0d, 5'h1c, 5'h1d:
 			op_long = 1'b0;
-		else
-			op_long = 1'b1;
+		default: op_long = 1'b1;
+		endcase
 	end
 	endtask
 
@@ -323,7 +367,7 @@ module f8_3850 (
 			case(instr)
 			0: begin
 				instr_romc(5'h1c);
-				instr_next <= ext_res_n_d ? 1 : 0;
+				instr_next = ext_res_n_d ? 1 : 0;
 				lbus_sel = LBUS_CONST_0;
 				//alu_op = `ALU_COM;
 				acc_write();
@@ -341,7 +385,10 @@ module f8_3850 (
 		end else if(do_irq) begin
 			new_icb = 1'b0;	
 			case(instr)
-			0: instr_romc(5'h1c);
+			0: begin
+				instr_romc(5'h1c);
+				op_long = 1'b1;
+			end
 			1: instr_romc(5'h0f);
 			2: instr_romc(5'h13);
 			3: do_instr_last();
@@ -649,8 +696,8 @@ module f8_3850 (
 				0: begin
 					instr_romc(5'h1c);
 					scr_read(6'd9);
-					new_icb = scr_q[4];
-					new_stat = scr_q[3:0];
+					//new_icb = scr_q[4];
+					//new_stat = scr_q[3:0];
 				end
 				1: begin
 					do_instr_last();
@@ -988,9 +1035,13 @@ module f8_3850 (
 				case(instr)
 				0: begin
 					instr_romc(5'h1c);
-					db_write();
+					if(cmp_mode) begin
+						db_read();
+					end else begin
+						io_read(opcode[0]);
+						db_write();
+					end
 					acc_write();
-					io_read(opcode[0]);
 					alu_op = `ALU_R;
 					alu_stat = 4'b0101;
 					new_stat = 4'b0000;

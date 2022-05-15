@@ -46,8 +46,9 @@ module f8_3850_alu(
 
 	task add;
 	input [7:0] a, b;
+	input carry;
 	begin
-		{t, result[6:0]} = a[6:0] + b[6:0];
+		{t, result[6:0]} = a[6:0] + b[6:0] + carry;
 		{c, result[7]} = t + a[7] + b[7];
 
 		ov = c ^ t;
@@ -88,19 +89,19 @@ module f8_3850_alu(
 		`ALU_LINK: begin
 			//add_y = c_in;
 			//result = sum;
-			add(left, {7'h0, c_in});
+			add(left, 8'h00, c_in);
 		end
 		`ALU_COM: result = ~left;
 		/*`ALU_INC: begin
 			add_y = 8'h1;
 			result = sum;
 		end */
-		`ALU_INC: add(left, 8'h1);
+		`ALU_INC: add(left, 8'h1, 1'b0);
 		`ALU_AND: result = left & right;
 		`ALU_OR: result = left | right;
 		`ALU_XOR: result = left ^ right;
-		`ALU_ADD: add(left, right);
-		`ALU_CMP: add(~left + 1, right); /* begin
+		`ALU_ADD: add(left, right, 1'b0);
+		`ALU_CMP: add(~left, right, 1'b1); /* begin
 			result = sum;
 			add_x = ~left + 1;
 		end */
@@ -113,7 +114,7 @@ module f8_3850_alu(
 		end
 		`ALU_DEC_R: begin
 			//add_x = 8'hff;
-			add(8'hff, right);
+			add(8'hff, right, 1'b0);
 			//result = sum;
 		end
 		endcase

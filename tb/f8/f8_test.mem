@@ -72,10 +72,36 @@ a0		//4e: A <= io0
 a5		//4f: A <= io5
 26 12 	//50: A <= io12
 
-29 07 ff /* jmp 0x7ff */
+2a 04 01 // 52: DC0 <= 0x0401
+16		// 55: A <= [DC0]
+25 0a 	// 56: comp 0x0a
+82 3 	// 58: BC 5c
+2b 2b	// 5a: NOP NOP
+
+74		// 5c: A <= 04
+bc		// 5d: IO c <= A
+70		// 5e: A <= 00
+bd		// 5f: IO d <= A
+
+1b		// 60: EI
+
+2b 2b	// 61: NOP NOP
+
+1e		// 63: r9 <= status
+1b		// 64: e1
+21 00 	// 65: A &= 0
+1d		// 66: status <= r9
+1b
+1e
+1a
+1d
+
+
+29 07 ff /* 67: jmp 0x7ff */
 
 @400
 1c		/* 400: pop */
+00 		/* 401: $00 */
 
 @7ff
-90 fe	/* 7ff: jmp 7ff */
+90 ff	/* 7ff: jmp 7ff */
